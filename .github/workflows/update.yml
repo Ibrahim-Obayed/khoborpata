@@ -1,0 +1,75 @@
+name: খবর হালনাগাদ
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"     # প্রতি ১০ মিনিটে (গিটহাব মাঝে মাঝে দেরি করে)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: কোড আনা (গোপন রিপোজিটরি, শুধু পড়ার চাবি)
+        env:
+          KEY: ${{ secrets.CODE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/code_key && chmod 600 ~/.ssh/code_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/code_key -o IdentitiesOnly=yes" git clone --depth 1 git@github.com:Ibrahim-Obayed/khoborpata-code.git app
+          rm -f ~/.ssh/code_key
+
+      - name: আগের ভাণ্ডার ফিরিয়ে আনা (data শাখা)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p app/data app/site/data
+          if git ls-remote --exit-code --heads "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" data >/dev/null 2>&1; then
+            git clone --depth 1 --branch data "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" state
+            cp -f state/*.json app/data/ 2>/dev/null || true
+          fi
+          ls -la app/data
+
+      - name: খবর আনা
+        working-directory: app
+        run: |
+          python3 scripts/fetch_news.py
+          python3 scripts/fetch_videos.py || true
+
+      - name: ভাণ্ডার সংরক্ষণ (সবসময় মাত্র একটা কমিট, ইতিহাস জমে না)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf out && mkdir out && cp app/data/*.json out/
+          cd out
+          git init -q -b data
+          git config user.name "khoborpata-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A && git commit -q -m "ভাণ্ডার $(date -u +%FT%TZ)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" data
+
+      - name: সাইট সাজানো
+        run: |
+          rm -rf _site && cp -r app/site _site
+          ls -la _site _site/data
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: সাইট প্রকাশ
+        id: deploy
+        uses: actions/deploy-pages@v4

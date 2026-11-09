@@ -9,6 +9,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: write      # পরের রান নিজে চালু করার জন্য (নিচের "next" কাজ)
 
 concurrency:
   group: update
@@ -73,3 +74,23 @@ jobs:
       - name: সাইট প্রকাশ
         id: deploy
         uses: actions/deploy-pages@v4
+
+  # গিটহাবের cron-শিডিউল এই রিপোতে চলছিল না (অনেক ঘণ্টায় একটাও নয়)। তাই প্রতিটি রান শেষে ৮ মিনিট অপেক্ষা করে
+  # নিজেই পরের রান চালু করে ⇒ প্রায় ১০ মিনিট পর পর হালনাগাদ। আগের রান ব্যর্থ হলেও (if: always()) চক্র ভাঙে না।
+  # থামাতে: Actions › "খবর হালনাগাদ" › ⋯ › Disable workflow। (সমান্তরাল চক্র concurrency-তে নিজে থেকে এক হয়ে যায়।)
+  next:
+    needs: update
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: ৮ মিনিট পর পরের রান
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 480
+          for i in 1 2 3 4; do
+            gh workflow run update.yml -R "${{ github.repository }}" --ref main && exit 0
+            sleep 20
+          done
+          exit 1
